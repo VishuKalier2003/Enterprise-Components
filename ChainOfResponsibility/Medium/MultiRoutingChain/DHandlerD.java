@@ -1,0 +1,18 @@
+public class DHandlerD implements HandleX {
+
+    public HandleX next;
+
+    @Override
+    public void setNext(HandleX handle) {
+        this.next = handle;
+    }
+
+    @Override
+    public HandleX getNext() {return next;}
+
+    @Override public String handle(String input) {
+        if(!Character.isUpperCase(input.charAt(0)))
+            return input+" handler D failed !! ";
+        return input+" Handler D passed !! ";
+    }
+}
