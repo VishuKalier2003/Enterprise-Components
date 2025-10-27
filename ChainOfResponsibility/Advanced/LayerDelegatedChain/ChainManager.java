@@ -1,9 +1,9 @@
 public class ChainManager {
-    private final Router router;
+    private final RouterX router;
     private final Delegator delegator;
 
     public ChainManager() {
-        this.router = new Router();
+        this.router = new RouterX();
         this.delegator = new Delegator();
     }
 

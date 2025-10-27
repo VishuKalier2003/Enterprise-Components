@@ -2,10 +2,10 @@
 import java.util.HashMap;
 import java.util.Map;
 
-public class Router {
+public class RouterX {
     private final Map<String, Chainable<?>> router;
 
-    public Router() {
+    public RouterX() {
         this.router = new HashMap<>();
         router.put("PRESENTATION", null);
         router.put("SERVICE", null);
