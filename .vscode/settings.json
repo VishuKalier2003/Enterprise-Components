@@ -3,6 +3,7 @@
         "auditchain",
         "chainofresponsibility",
         "dynamicpriortization",
+        "exceptionescalationchain",
         "faulttolerantpipe",
         "layerdelegationchain",
         "policyrouting"
