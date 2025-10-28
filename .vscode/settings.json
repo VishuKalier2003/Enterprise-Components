@@ -9,6 +9,7 @@
         "faulttolerantpipe",
         "feedbackloop",
         "layerdelegationchain",
-        "policyrouting"
+        "policyrouting",
+        "reentrantchain"
     ]
 }
