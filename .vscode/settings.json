@@ -3,9 +3,11 @@
         "auditchain",
         "cachechain",
         "chainofresponsibility",
+        "Configurer",
         "dynamicpriortization",
         "exceptionescalationchain",
         "faulttolerantpipe",
+        "feedbackloop",
         "layerdelegationchain",
         "policyrouting"
     ]
