@@ -9,6 +9,7 @@
         "faulttolerantpipe",
         "feedbackloop",
         "layerdelegationchain",
+        "multiphasechain",
         "policyrouting",
         "reentrantchain"
     ]
