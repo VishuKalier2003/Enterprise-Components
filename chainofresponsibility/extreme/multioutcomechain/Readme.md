@@ -1,306 +1,151 @@
-Direct answer: below is a documentation-ready README you can drop into your project root. It explains the design, folder structure, purpose of each class, control flow, class diagram, and the three unique techniques (registry-based load balancing, self-healing, dynamic factory assertion) with focused block diagrams and code-style class snippets. Copy this file into `README.md`.
 
 ---
 
-# Self-Healing Multi-Outcome Chain of Responsibility
+# Multi-Outcome Feedback-Driven Chain of Responsibility
 
-A compact, production-minded simulation of a Chain of Responsibility extended with multi-outcome routing, feedback-driven adaptation, and self-healing. Demonstrates how handlers (models) emit outcomes, how outcomes are routed and aggregated, and how a FeedbackManager repairs and re-registers handlers automatically.
-
----
-
-## Contents
-
-* Overview
-* Architecture (high-level)
-* Folder structure
-* Component reference (each class / interface explained)
-* Control flow (block diagram)
-* Class diagram (Mermaid)
-* Unique techniques (registry-based load balancing, self-healing, dynamic factory assertion) — each with focused block diagram and class-level explanation
-* How to run / test (primitive)
-* Extensibility & production hardening notes
-* Summary
+**A self-healing, adaptive Chain of Responsibility simulation** implemented in Java.
+Provides: dynamic handler selection, registry-based load balancing, cache short-circuiting, outcome-driven routing, and a feedback loop that performs automated healing and factory-driven regeneration.
 
 ---
 
-## Overview
+## Table of contents
 
-This component simulates an adaptive execution pipeline:
-
-* `Model` implementations (M1..M4) act as handlers that process `Request` and emit `Data` (an outcome record).
-* `OutcomeManager` orchestrates work using a `Cache` (bounded queue) and `Registry` to find models.
-* `Extractor` writes outcomes to `Board` (HealthRegister) and `LoadBalancer`.
-* `FeedbackManager` analyzes system state and performs healing or creation using a `Factory`.
-* `Registry` stores active `Model` instances. `LoadBalancer` tracks runtime load metrics.
-
-Goal: show how an adaptive CoR pipeline can monitor, react, and heal itself without external orchestration.
-
----
-
-## Architecture (high-level)
-
-Layers:
-
-1. Client layer — sends `Request`.
-2. Orchestration layer — `OutcomeManager` (dispatch) + `Extractor`.
-3. Observability & state — `Board` (health), `LoadBalancer`, `Cache`.
-4. Adaptive control — `FeedbackManager`, `Factory`, `Registry`.
-5. Execution nodes — `ModelM1..M4` (handler implementations).
-
-Design constraints:
-
-* Bounded propagation via `Cache` queue size.
-* Feedback loop that can create and register new models.
-* Simple health metrics (hits/total) used to make caching and healing decisions.
+1. Purpose
+2. High-level summary
+3. Folder structure (files → one-liner)
+4. Component glossary (detailed responsibilities)
+5. Class diagrams (Mermaid `classDiagram`)
+6. Control-flow (expressed via class diagrams and interactions)
+7. Unique techniques explained (one section per technique with class diagram)
+8. How to extend to production (concise steps)
+9. Summary
 
 ---
 
-## Folder structure
+## 1. Purpose
+
+This component demonstrates a multi-outcome CoR variant where handlers (Models) emit outcomes as `Data` objects. The `OutcomeManager` orchestrates execution using a `Cache`, `Registry`, and `LoadBalancer`. The `FeedbackManager` observes aggregated metrics and performs automated healing / factory creation through `Factory` and `Registry`. The design is intended for learning, prototyping, and small-scale experiments; it is readily extensible into a production-grade subsystem.
+
+---
+
+## 2. High-level summary
+
+* Client submits a `Request`.
+* `OutcomeManager` uses `Cache` to pick candidate `Cell` entries.
+* For each `Cell`, it resolves `Model` from `Registry` and calls `Model.execute(Request)` producing `Data` (the implicit Outcome).
+* `Extractor` updates `Board` (health) and `LoadBalancer` (load). `Board` may push good cells into `Cache`.
+* `FeedbackManager` monitors `Board` and `LoadBalancer` and can `create()` or `heal()` models via `Factory` and `Registry`.
+* The loop continues iteratively to demonstrate self-healing and adaptive routing.
+
+---
+
+## 3. Folder structure (file → one-liner)
 
 ```
-/src
-  /main
-    /java
-      /chainofresponsibility
-        /extreme
-          /multioutcomechain
-            Board.java
-            Cache.java
-            Cell.java
-            Data.java
-            Extractor.java
-            Factory.java
-            FeedbackManager.java
-            LoadBalancer.java
-            Metrics.java
-            Model.java
-            ModelM1.java
-            ModelM2.java
-            ModelM3.java
-            ModelM4.java
-            OutcomeManager.java
-            Registry.java
-            Request.java
-            Status.java
-README.md
+src/main/java/chainofresponsibility/extreme/multioutcomechain/
+├── Board.java               // Board: persistent registry of Cells (handler health snapshots)
+├── Cache.java               // Cache: short-lived queue of top Cells for fast selection
+├── Cell.java                // Cell: metrics holder (hits/miss/total + health())
+├── Data.java                // Data: outcome-like payload from Model.execute
+├── Extractor.java           // Extractor: writes Data into Board + LoadBalancer
+├── Factory.java             // Factory: creates concrete Model instances (ModelM1..M4)
+├── FeedbackManager.java     // FeedbackManager: observes health & load, creates/heals models
+├── LoadBalancer.java        // LoadBalancer: registry of realtime loads by handler id
+├── Model.java               // Model interface: execute(Request) -> Data
+├── ModelM1..ModelM4.java    // Concrete Models (simulated handlers)
+├── OutcomeManager.java      // OutcomeManager: orchestrates cache->registry->execution loop
+├── Registry.java            // Registry: map of id -> Model
+├── Request.java             // Request: client payload to be processed
+├── Metrics.java             // Metrics: interface for health counters (used by Cell)
+├── Extractor.java           // Extractor: moves Data into Board/LoadBalancer
+└── README.md                // This doc
 ```
-
-Brief role for each file:
-
-* **Board.java** — Health register. Contains `Cell` list and policies for adding/updating cells and pushing to cache.
-* **Cache.java** — Bounded in-memory queue for high-health `Cell` objects. Triggers `FeedbackManager` when thresholds are below limits. Provides queue snapshot for processing.
-* **Cell.java** — Health metric holder. Implements `Metrics`. Maintains hit/miss/total counters. `health()` returns hit/total.
-* **Data.java** — Outcome (routing packet). Carries id, load, request, missed flag, and status.
-* **Extractor.java** — Glue that writes `Data` into `Board` and updates `LoadBalancer`. Encapsulates state-change logic.
-* **Factory.java** — Creates `Model` instances. Encapsulates creation logic.
-* **FeedbackManager.java** — Observes board/load, creates new models, and heals weak cells by resetting metrics and updating balancer.
-* **LoadBalancer.java** — Simple in-memory map of model id → integer load. Read/write used by `OutcomeManager` and `Extractor`.
-* **Metrics.java** — Interface for hit/miss/health; implemented by `Cell`.
-* **Model.java** — Handler abstraction: `execute(Request): Data`. Implemented by ModelM1..M4.
-* **ModelM*.java** — Concrete handlers. Simulated randomness used for hits/misses and load. Return `Data`.
-* **OutcomeManager.java** — Main orchestrator. Ensures cache is filled, iterates cells, calls models, feeds results to `Extractor`, updates load, processes cache.
-* **Registry.java** — Central registry mapping id → Model instance. Supports `register` and `getModel`.
-* **Request.java** — Simple request payload.
-* **Status.java** — Enum for `ACTIVE`, `CRASHED`.
 
 ---
 
-## Component reference (detailed)
+## 4. Component glossary (detailed responsibilities)
 
-### `Model` (interface)
+* **Model (interface)**
 
-```java
-public interface Model {
-    String getID();
-    Data execute(Request request);
-}
-```
+  * Contract for all handler implementations. `Data execute(Request request)`.
+  * Purpose: encapsulate processing logic and return `Data` (outcome + metadata).
 
-Purpose: polymorphic handler. Implementations simulate processing and return `Data` representing an outcome.
+* **ModelM1..ModelM4 (concrete)**
 
-### `ModelM1/2/3/4`
+  * Emulate distinct handler behavior. Update internal `load`. Randomly set `missed` to simulate failure. Return `Data` with `status`, `load`, `missed`.
 
-Key behavior: maintain internal `load` counter, simulate success/failure via randomness, produce `Data` with `id`, `load`, `missed` flag and `Status`.
+* **Registry**
 
-### `Registry`
+  * Map of `id -> Model`.
+  * Purpose: service locator for dynamic lookup of handler instances. Registry is the authoritative store used by `OutcomeManager` and `FeedbackManager`.
 
-```java
-public class Registry {
-    private final Map<String, Model> modelMap = new LinkedHashMap<>();
-    public void register(String id, Model m) { modelMap.put(id, m); }
-    public Model getModel(String id) { return modelMap.get(id); }
-}
-```
+* **OutcomeManager**
 
-Purpose: central addressability for models. Enables OutcomeManager and Extractor to find models by id.
+  * Orchestrator for a single cycle. Uses `Cache` to pick `Cell`s and runs associated `Model.execute`. Calls `Extractor` to update `Board` and `LoadBalancer`. Invokes `FeedbackManager` when cache is not full or at policy triggers. Purpose: real-time routing and execution.
 
-### `OutcomeManager`
+* **Cache**
 
-```java
-public class OutcomeManager {
-    private final Cache cache;
-    private final Registry registry;
-    private final Extractor extractor;
-    private final LoadBalancer balancer;
-    private final FeedbackManager feedbackManager;
-    public void initiateWork(Request request, Board board) { ... }
-}
-```
+  * Bounded queue of `Cell` references (size 3 in code). Holds the best candidate handlers for quick selection. Reduces load on `Board` for read-heavy paths.
 
-Purpose: drives work. Ensures cache has cells (triggers FeedbackManager.create when needed), iterates cells, retrieves model by cell id, calls `model.execute`, updates cell hits/misses, feeds Extractor, updates LoadBalancer, and processes cache.
+* **Board**
 
-Design note: treat `cache.queue()` as snapshot or poll items to avoid iterator-while-modify issues.
+  * Persistent list of `Cell` objects indexed by handler numeric suffix. Stores health snapshots, provides `updateState`, and decides when to place `Cell` into `Cache` (via `putIntoCache` policy).
 
-### `Extractor`
+* **Cell**
 
-```java
-public class Extractor {
-    public void feedIntoLoadBalancer(Data data, LoadBalancer balancer) { ... }
-    public void feedIntoBoard(Data data, Board board) { ... }
-}
-```
+  * Implements `Metrics`. Tracks `hits`, `miss`, `total`, `health()` and `status`. Used as lightweight handler proxies for selection and health evaluation.
 
-Purpose: centralizes side-effect updates to board and balancer. Keeps OutcomeManager simpler.
+* **Extractor**
 
-### `Board` and `Cell`
+  * Single-purpose utility that accepts `Data` and updates `Board` (health) and `LoadBalancer` (load).
 
-* `Board` holds list of `Cell`. `Board.updateState(index, cell)` updates the board and, if cell meets health criteria, pushes cell to `Cache`.
-* `Cell` implements `Metrics` with counters and `health()`.
+* **LoadBalancer**
 
-### `Cache`
+  * Simple map-based load registry. Stores per-handler load values. OutcomeManager/Extractor update it; FeedbackManager consults it for healing decisions.
 
-* Bounded queue of `Cell` objects (size 3 in sample). `extractCellFromBoard` is called by Board when adding healthy cells. `process()` cleans out cells with low health and maintains queue.
+* **FeedbackManager**
 
-### `FeedbackManager`
+  * Observes `Board` and `LoadBalancer` and performs two actions:
 
-* `create()` uses `Factory` to create new Models and registers them into `Registry`. Inserts new `Cell` into `Board`, and calls `balancer.updateLoad(id, 0)`.
-* `heal()` iterates board and resets the metrics of low-health cells. Also updates LoadBalancer to zero load.
+    * `create()` uses `Factory` to instantiate a new `Model`, register it, and insert a new `Cell` into `Board`.
+    * `heal()` scans `Board` to reset health counters on poorly performing `Cell`s and updates `LoadBalancer`. Purpose: self-healing and regeneration.
 
-### `LoadBalancer`
+* **Factory**
 
-* Simple map of model id → current load. Used for influence and observability. Not a heavy scheduling algorithm in the sample; extendable.
+  * Creates concrete `Model` objects by index, used by `FeedbackManager` to add new handlers to the system.
+
+* **Request / Data**
+
+  * `Request`: client payload.
+  * `Data`: returned by Model.execute and used by Extractor and OutcomeManager as the unit of an outcome (contains `id`, `load`, `missed`, `status`).
 
 ---
 
-## Control flow — block diagram
+## 5. Class diagrams (Mermaid `classDiagram`)
 
-Paste the following Mermaid block diagram into Obsidian (it is a block-style conceptual diagram, not a flowchart):
+> Note: these diagrams show classes, primary fields and core methods. They illustrate composition and associations used by design.
 
-```mermaid
-graph TB
-  Client[Client Request] --> OM(OutcomeManager)
-  OM -->|ensure cache full| FM(FeedbackManager)
-  FM -->|create/register| Registry
-  FM -->|insert cell| Board
-  Board --> Cache
-  Cache --> OM
-  OM -->|for each cell| Registry
-  Registry --> Model[Model Instance (M1..M4)]
-  Model --> Data[Data (outcome)]
-  Data --> Extractor
-  Extractor --> Board
-  Extractor --> LoadBalancer
-  Board --> Cache
-  LoadBalancer --> FM
-  Board --> FM
-  FM -->|heal/create| Factory
-  Factory --> Registry
-```
-
-Explanation in words:
-
-1. Client calls `OutcomeManager`.
-2. `OutcomeManager` fills `Cache` by invoking `FeedbackManager` when the cache is not full.
-3. `FeedbackManager.create()` uses `Factory` to produce models and registers them via `Registry`. It also inserts board `Cell`s for these models.
-4. `OutcomeManager` processes each `Cell` in `Cache`, retrieves corresponding `Model` from `Registry`, and calls `execute`.
-5. `Model` returns `Data` (outcome). `Extractor` writes `Data` into `Board` and updates `LoadBalancer`.
-6. `Board` uses `Cell.health()` to decide whether to keep a `Cell` in `Cache`.
-7. `FeedbackManager` consumes load and board data to decide on heals / creates.
-
----
-
-## Class diagram (Mermaid)
-
-Place this Mermaid class diagram in your README or Obsidian:
+### Main system class diagram
 
 ```mermaid
 classDiagram
     direction LR
-    class Model {
-        <<interface>>
-        +String getID()
-        +Data execute(Request)
-    }
-    class ModelM1
-    class ModelM2
-    class ModelM3
-    class ModelM4
+    class Request { +String input; +int sum; }
+    class Data { +Status status; +String id; +Request request; +int load; +boolean missed; +int getIndex(); }
+    class Model { <<interface>> +String getID(); +Data execute(Request request); }
+    class ModelM1 { +String id; +int load; +String getID(); +Data execute(Request request); }
+    class Registry { -Map~String,Model~ modelMap; +register(String,Model); +getModel(String):Model; }
+    class LoadBalancer { -Map~String,Integer~ load; +updateLoad(String,int); +getLoad(String):int; }
+    class Board { -List~Cell~ board; -Cache cache; +insert(Cell); +updateState(int,Cell); +extractCell(int):Cell; }
+    class Cache { -Queue~Cell~ cells; -Queue~Cell~ temp; +extractCellFromBoard(Cell); +process(); +isQueueFull():boolean; +queue():Queue~Cell~; }
+    class Cell { -Status status; -String id; -int hits; -int miss; -int total; +health():double; +reset(); +getID():String; }
+    class Extractor { +feedIntoLoadBalancer(Data,LoadBalancer); +feedIntoBoard(Data,Board); }
+    class OutcomeManager { -Cache cache; -Registry registry; -Extractor extractor; -LoadBalancer balancer; -FeedbackManager feedbackManager; +initiateWork(Request,Board); }
+    class FeedbackManager { -Board board; -LoadBalancer balancer; -Registry registry; +create(); +heal(); }
+    class Factory { +static Model factory(int idx, String ID); }
+
     Model <|-- ModelM1
-    Model <|-- ModelM2
-    Model <|-- ModelM3
-    Model <|-- ModelM4
-
-    class Registry {
-        -Map~String,Model~ modelMap
-        +register(String,Model)
-        +getModel(String):Model
-    }
-
-    class OutcomeManager {
-        -Cache cache
-        -Registry registry
-        -Extractor extractor
-        -LoadBalancer balancer
-        -FeedbackManager feedbackManager
-        +initiateWork(Request,Board)
-    }
-
-    class Extractor {
-        +feedIntoLoadBalancer(Data,LoadBalancer)
-        +feedIntoBoard(Data,Board)
-    }
-
-    class Board {
-        -List~Cell~ board
-        -Cache cache
-        +insert(Cell)
-        +updateState(int,Cell)
-    }
-
-    class Cache {
-        -Queue~Cell~ cells
-        -Queue~Cell~ temp
-        +extractCellFromBoard(Cell)
-        +process()
-        +callFeedbackManager(FeedbackManager)
-    }
-
-    class LoadBalancer {
-        -Map~String,Integer~ load
-        +updateLoad(String,int)
-        +getLoad(String):int
-    }
-
-    class FeedbackManager {
-        -Board board
-        -LoadBalancer balancer
-        -Registry registry
-        +create()
-        +heal()
-    }
-
-    class Factory {
-        +static Model factory(int,String)
-    }
-
-    class Cell {
-        -Status status
-        -String id
-        -int hits,miss,total
-        +health():double
-        +reset()
-    }
-
+    Registry --> Model : manages >
     OutcomeManager --> Cache
     OutcomeManager --> Registry
     OutcomeManager --> Extractor
@@ -308,204 +153,146 @@ classDiagram
     OutcomeManager --> FeedbackManager
     Extractor --> Board
     Extractor --> LoadBalancer
-    Board o-- Cell
-    Board --> Cache
-    FeedbackManager --> Registry
+    Board "1" o-- "*" Cell : contains >
+    Cache "1" o-- "*" Cell : holds >
     FeedbackManager --> Board
+    FeedbackManager --> Registry
     FeedbackManager --> LoadBalancer
-    Registry --> ModelM1
-    Registry --> ModelM2
-    Registry --> ModelM3
-    Registry --> ModelM4
+    Factory --> Model
 ```
 
 ---
 
-## Unique techniques & focused block diagrams
+## 6. Control flow (expressed as class interactions in class diagrams)
 
-Each technique below explains which classes participate and how.
-
-### 1) Registry-based Load Balancing (lightweight)
-
-**Purpose:** Central registry provides addressability and baseline for load updates; `LoadBalancer` holds runtime load metrics to drive decisions.
-
-Block diagram:
+> The following `classDiagram` highlights the sequence of responsibilities by annotating method names to show the functional chain. This is a class-centric depiction of control flow.
 
 ```mermaid
-graph TB
-  Registry --> LoadBalancer
-  OutcomeManager --> Registry
-  OutcomeManager --> LoadBalancer
-  Extractor --> LoadBalancer
-  LoadBalancer --> FeedbackManager
+classDiagram
+    direction LR
+    class Client { +submit(Request); }
+    class OutcomeManager { +initiateWork(Request,Board); }
+    class Cache { +isQueueFull(); +queue():Queue~Cell~; +process(); }
+    class Registry { +getModel(String):Model; }
+    class Model { +Data execute(Request); }
+    class Extractor { +feedIntoBoard(Data,Board); +feedIntoLoadBalancer(Data,LoadBalancer); }
+    class Board { +updateState(int,Cell); +extractCell(int):Cell; +insert(Cell); }
+    class LoadBalancer { +updateLoad(String,int); }
+    class FeedbackManager { +create(); +heal(); }
+
+    Client --> OutcomeManager : submit(Request)
+    OutcomeManager --> Cache : if not full -> feedbackManager.create()
+    OutcomeManager --> Cache : process cache.queue()
+    Cache --> OutcomeManager : returns Cell list
+    OutcomeManager --> Registry : getModel(cell.id)
+    Registry --> OutcomeManager : Model
+    OutcomeManager --> Model : execute(Request)
+    Model --> OutcomeManager : Data
+    OutcomeManager --> Extractor : feedIntoBoard(Data)
+    OutcomeManager --> Extractor : feedIntoLoadBalancer(Data)
+    Extractor --> Board : updateState
+    Extractor --> LoadBalancer : updateLoad
+    Board --> Cache : putIntoCache decision (Board.updateState -> Cache.extractCellFromBoard)
+    OutcomeManager --> FeedbackManager : call during cycle or if low cache
+    FeedbackManager --> Factory : create()
+    FeedbackManager --> Registry : register(newModel)
+    FeedbackManager --> Board : insert(new Cell)
 ```
 
-How it works:
+---
 
-* `Registry` stores `Model` instances and IDs.
-* `OutcomeManager` asks `Registry` for model by ID and triggers `Model.execute`.
-* `Extractor` on each `Data` writes `load` into `LoadBalancer.updateLoad`.
-* `FeedbackManager` queries `LoadBalancer` metrics to decide healing or creating new instances.
-* Extension: swap `LoadBalancer` with a weighted scheduler to select faster models based on `getLoad`.
+## 7. Unique techniques explained (each with a small Mermaid class diagram and details)
 
-Code snippet (LoadBalancer):
+### A. Registry-based Load Balancing
 
-```java
-public class LoadBalancer {
-    private final Map<String,Integer> load = new LinkedHashMap<>();
-    public void updateLoad(String server, int loadValue) { load.put(server, loadValue); }
-    public int getLoad(String server) { return load.getOrDefault(server, 0); }
-}
-```
+**Intent:** Use a central `Registry` and `LoadBalancer` to route by load without tightly coupling orchestration to specific model implementations.
+**How it’s implemented:** `Extractor.feedIntoLoadBalancer(data, balancer)` writes load into `LoadBalancer`, `FeedbackManager` or a future routing policy can query `LoadBalancer.getLoad(id)` and `Registry.getModel(id)` to make decisions.
 
-### 2) Self-Healing (Feedback -> Factory -> Registry -> Board)
-
-**Purpose:** When HealthRegister shows degraded cells, FeedbackManager heals or creates new model instances.
-
-Block diagram:
+Mermaid snippet showing classes involved:
 
 ```mermaid
-graph TB
-  Board --> FeedbackManager
-  LoadBalancer --> FeedbackManager
-  FeedbackManager --> Factory
-  Factory --> Registry
-  Registry --> Board
+classDiagram
+    Registry --> Model : getModel()
+    OutcomeManager --> LoadBalancer : consult load
+    LoadBalancer --> Registry : (used by) feedback decisions
+    Extractor --> LoadBalancer : updateLoad()
 ```
 
-How it works:
+**Notes:** This is a lightweight, simulation-level load registry. In production replace with a metrics system and an adaptive router that uses weighted selection.
 
-* `Board` exposes health metrics via `Cell.health()`.
-* If low health detected, `FeedbackManager.heal()` resets metrics and updates balancer to zero.
-* If insufficient capacity, `FeedbackManager.create()` uses `Factory.factory()` to instantiate new `Model`.
-* `Registry.register()` stores the new model and `Board.insert()` adds corresponding `Cell`.
-* This forms the self-healing create-and-register loop.
+---
 
-Code snippet (FeedbackManager.create):
+### B. Self-healing (FeedbackManager + Factory)
 
-```java
-public void create() {
-    int r = (int)(Math.random() * 4) + 1;
-    String id = "M"+board.size();
-    Model model = Factory.factory(r, id);
-    registry.register(id, model);
-    balancer.updateLoad(id, 0);
-    Cell cell = new Cell(id);
-    board.insert(cell);
-}
-```
+**Intent:** Detect degraded handler health and remediate automatically by resetting metrics or creating new handler instances.
+**How it’s implemented:** `FeedbackManager.heal()` resets poorly performing `Cell` metrics; `create()` uses `Factory.factory(...)` to create a new `Model` and `Registry.register(id, model)` to make it available.
 
-### 3) Dynamic Factory Assertion
-
-**Purpose:** `Factory` encapsulates how to create different `Model` implementations. It allows consistent, centralized instantiation policy.
-
-Block diagram:
+Mermaid snippet:
 
 ```mermaid
-graph TB
-  FeedbackManager --> Factory
-  Factory --> ModelM1
-  Factory --> ModelM2
-  Factory --> ModelM3
-  Factory --> ModelM4
-  Factory --> Registry
+classDiagram
+    FeedbackManager --> Board : scan health()
+    FeedbackManager --> Factory : create()
+    Factory --> Model : new ModelMx()
+    FeedbackManager --> Registry : register(id,model)
+    FeedbackManager --> LoadBalancer : updateLoad(id,0)
+    FeedbackManager --> Board : insert(new Cell)
 ```
 
-How it works:
+**Notes:** Healing includes metric reset and load initialization. Extend to add cooldowns, canary deployments, and validation probes.
 
-* `Factory` receives a selection parameter and produces a `Model` instance.
-* `FeedbackManager` decides when to call `Factory`.
-* New models are registered to `Registry` and included in the system.
+---
 
-Factory code snippet:
+### C. Cache short-circuiting (Board → Cache)
 
-```java
-public class Factory {
-    public static Model factory(int idx, String ID) {
-        return switch (idx) {
-            case 1 -> new ModelM1(ID);
-            case 2 -> new ModelM2(ID);
-            case 3 -> new ModelM3(ID);
-            case 4 -> new ModelM4(ID);
-            default -> throw new IllegalArgumentException("Invalid model index: " + idx);
-        };
-    }
-}
+**Intent:** Reduce read/selection latency and bound propagation by keeping a small set of high-health `Cell`s in `Cache`.
+**How it’s implemented:** `Board.updateState(index, cell)` evaluates `putIntoCache` and calls `cache.extractCellFromBoard(cell)` when criteria met.
+
+Mermaid snippet:
+
+```mermaid
+classDiagram
+    Board --> Cache : extractCellFromBoard(Cell)
+    OutcomeManager --> Cache : process queue
+    Cache --> OutcomeManager : supplies Cells
 ```
 
+**Notes:** Cache size is bounded; include TTLs and eviction policies for production.
+
 ---
 
-## How to run (minimal / demo)
+### D. Outcome-as-Data (implicit Outcome)
 
-1. Build a small `Main` class that:
+**Intent:** Use `Data` returned by `Model.execute` as the outcome object carrying routing metadata (id, load, missed, status).
+**How it’s implemented:** `OutcomeManager` treats `Data` as an outcome and `Extractor` interprets it for routing updates.
 
-   * Instantiates `Registry`, `LoadBalancer`, `Board`, `Cache`, `Extractor`, `FeedbackManager`, and `OutcomeManager`.
-   * Uses `Factory` to create a few initial models and `Registry.register` them.
-   * Calls `OutcomeManager.initiateWork(request, board)` repeatedly (e.g., 25-30 epochs) to observe healing and creation.
+Mermaid snippet:
 
-Example pseudo-main:
-
-```java
-public static void main(String[] args) {
-  Registry registry = new Registry();
-  LoadBalancer balancer = new LoadBalancer();
-  Cache cache = new Cache();
-  Board board = new Board(cache);
-  Extractor extractor = new Extractor();
-  FeedbackManager fm = new FeedbackManager(board, balancer, registry);
-  OutcomeManager om = new OutcomeManager(cache, registry, extractor, balancer, fm);
-
-  // Seed models
-  Model m1 = Factory.factory(1, "M0"); registry.register("M0", m1); balancer.initiateLoad("M0");
-  Model m2 = Factory.factory(2, "M1"); registry.register("M1", m2); balancer.initiateLoad("M1");
-  Model m3 = Factory.factory(3, "M2"); registry.register("M2", m3); balancer.initiateLoad("M2");
-
-  Request req = new Request();
-  req.setInput("input");
-  for (int i=0;i<30;i++) {
-    om.initiateWork(req, board);
-  }
-}
+```mermaid
+classDiagram
+    Model --> Data : returns
+    OutcomeManager --> Extractor : passes Data
+    Extractor --> Board : updates health
+    Extractor --> LoadBalancer : updates load
 ```
 
----
-
-## Extensibility & production hardening notes
-
-To move this from simulation to production:
-
-* Introduce explicit `Outcome` object (metadata: `type, priority, ttl, targets, correlationId`).
-* Replace in-memory queues and registry with distributed components (Kafka, Redis, service registry).
-* Add durable persistence for Board/Registry state (DB) and metrics (Prometheus).
-* Add idempotency & deduplication for outcomes (use correlation IDs).
-* Implement exponential smoothing and cooldown windows in `FeedbackManager` to prevent oscillation.
-* Introduce circuit breakers and timeouts for model execution.
-* Externalize factory policies to configuration and support canary creation strategies.
-* Add tracing (OpenTelemetry) for end-to-end observability.
+**Notes:** Consider introducing a dedicated `Outcome` type to separate routing metadata from payload.
 
 ---
 
-## What you learn from this component (unique techniques & properties)
+## 8. How to extend to production (practical steps)
 
-* **Multi-outcome routing**: handlers emit outcome records that can spawn parallel or branch execution.
-* **Registry-based discovery**: enables dynamic addition/removal and addressability of handlers.
-* **Cache short-circuiting**: reduces access to lower-quality nodes and bounds work queue size.
-* **Self-healing**: detection (via Board health metrics) and automated creation/healing of handlers via Factory.
-* **Feedback-driven adaptation**: load+health metrics drive decisions that change the next invocation topology.
-* **Factory assertion & policy encapsulation**: centralizes object creation and enables runtime strategy change.
-
-These techniques are production-relevant: autoscaling, canarying, circuit breaking, A/B runner selection, and self-repair.
+* Replace `Math.random()` failure simulation with real health signals (latency, error rate).
+* Add explicit `Outcome` object: `{type, payload, priority, ttl, targets, correlationId}`.
+* Use async messaging (Kafka/Redis/Rabbit) between `OutcomeManager` and dispatchers.
+* Implement idempotency keys and deduplication.
+* Persist `Registry` and `Board` to durable store for crash recovery.
+* Replace in-memory `LoadBalancer` with a metrics backend (Prometheus + service discovery).
+* Harden `FeedbackManager` with smoothing (EWMA) and cooldown windows to avoid oscillation.
+* Add unit and integration tests with deterministic failure injection.
 
 ---
 
-## Summary
+## 9. Summary (closing)
 
-This README documents a compact, illustrative implementation of an adaptive Chain of Responsibility with multi-outcome routing and a self-healing feedback loop. The code exercise is valuable as an educational prototype or internal demo. To make it production-grade, add durable state, distributed queues, richer outcomes, idempotency, and smoothing in the feedback engine. The design is modular, aligns with SOLID principles in practice, and demonstrates advanced system concepts that can be expanded for high-availability microservice platforms.
-
-If you want, I will:
-
-* Provide a patched refactor that introduces an explicit `Outcome` class and moves caching decision logic to `OutcomeManager`.
-* Produce a `Main.java` driver you can run as-is.
-* Generate unit tests for deterministic behavior by replacing randomness with injected strategy.
-
-Which next step do you want?
+This README documents a compact, extensible simulation of a multi-outcome feedback-driven Chain of Responsibility. The component demonstrates several advanced system design techniques—registry-based load balancing, cache short-circuiting, factory-driven regeneration, and a feedback-managed self-heal loop. It is intentionally modular. You can evolve each piece into production by introducing asynchronous messaging, observability, idempotency, and robust policy modules.
