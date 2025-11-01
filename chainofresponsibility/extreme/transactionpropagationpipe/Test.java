@@ -7,6 +7,7 @@ public class Test {
         final MarkerRegistry mr = new MarkerRegistry();
         final ChainManager cm = new ChainManager(co, mr);
         final TransactionManager tm = new TransactionManager(storage, mr);
+        // The ID's should be same for registry and storage to work
         final Handler h1 = new Handler("register-1", RegistrationFunctionRegistry.REGISTER.execute()),
         h2 = new Handler("auth-1", AuthenticationFunctionRegistry.AUTHENTICATE.execute()),
         h3 = new Handler("auth-2", AuthenticationFunctionRegistry.AUTHORIZE.execute()),
