@@ -12,6 +12,8 @@
         "multioutcomechain",
         "multiphasechain",
         "policyrouting",
-        "reentrantchain"
+        "reentrantchain",
+        "transactionpropagationpipe",
+        "VISHU"
     ]
 }
